@@ -1,26 +1,64 @@
 #!/bin/bash
+# requirements.sh - Dependency checks and installation for BuildProp scripts
+# shellcheck shell=bash
 
-# Those are the only partitions we need for building properties
-declare PARTITIONS2EXTRACT=("product" "vendor" "vendor_dlkm" "system" "system_ext" "system_dlkm")
+# Partitions required for property extraction
+declare -a PARTITIONS2EXTRACT=("product" "vendor" "vendor_dlkm" "system" "system_ext" "system_dlkm")
 
-[[ $(type -t "print_message") != function ]] && . ./util_functions.sh
+# Source utils if print_message is not yet available
+[[ "$(type -t print_message)" == "function" ]] || { echo "[ERROR] utils.sh must be sourced before requirements.sh"; exit 1; }
 
-# Install required packages and libs
-install_packages "zip" "p7zip" "dos2unix" "aria2"
+# ---------------------------------------------------------------------------
+# Core packages
+# ---------------------------------------------------------------------------
+install_packages "zip" "p7zip-full" "dos2unix" "aria2"
 
-# Check whethever python was installed, TODO: Improve install_packages function.
-if ! command -v python3 >/dev/null 2>&1; then
-	install_packages "python3"
+# Python 3
+if ! command -v python3 &>/dev/null; then
+  install_packages "python3"
 fi
 
-# Check if python3 pip module installed
-python3 -m pip -V &>/dev/null || print_message "Could not find pip module in python3, To fix this issue simply aria2c and install https://bootstrap.pypa.io/get-pip.py from python3" error
+# pip
+if ! python3 -m pip -V &>/dev/null; then
+  print_message "pip not found — attempting to install via get-pip.py..." warning
+  local _pip_tmp
+  _pip_tmp="$(mktemp)"
+  if curl -fsSL "https://bootstrap.pypa.io/get-pip.py" -o "$_pip_tmp"; then
+    python3 "$_pip_tmp" &>/dev/null
+    rm -f "$_pip_tmp"
+  else
+    print_message "Failed to download get-pip.py. Install pip manually: https://bootstrap.pypa.io/get-pip.py" error
+  fi
+fi
 
-# Check if payload_dumper is available
-payload_dumper -h &>/dev/null || print_message "Could not find payload_dumper executable. Install it using python3 -m pip install payload_dumper/" error
+# payload_dumper (Android OTA payload extractor)
+if ! command -v payload_dumper &>/dev/null; then
+  print_message "payload_dumper not found — installing via pip..." info
+  python3 -m pip install payload-dumper-go &>/dev/null \
+    || python3 -m pip install payload_dumper &>/dev/null \
+    || print_message "Could not install payload_dumper. Run: python3 -m pip install payload_dumper" error
+fi
 
-# Install imjtool if not already installed
-while [ ! -f "./imjtool" ]; do
-	print_message "./imjtool not found. Installing imjtool…" info
-	aria2c "http://newandroidbook.com/tools/imjtool"
-done
+# ---------------------------------------------------------------------------
+# imjtool (filesystem image tool)
+# ---------------------------------------------------------------------------
+if [[ ! -f "./imjtool" ]]; then
+  print_message "imjtool not found — downloading..." info
+
+  local _imj_url="https://newandroidbook.com/tools/imjtool"
+  local _max_attempts=3
+  local _attempt=0
+
+  while [[ ! -f "./imjtool" ]] && (( _attempt < _max_attempts )); do
+    _attempt=$(( _attempt + 1 ))
+    print_message "Downloading imjtool (attempt ${_attempt}/${_max_attempts})..." debug
+    aria2c --file-allocation=none -q "$_imj_url" -d . -o imjtool && break
+    sleep 2
+  done
+
+  if [[ ! -f "./imjtool" ]]; then
+    print_message "Failed to download imjtool after ${_max_attempts} attempts. Download manually from: ${_imj_url}" error
+  fi
+
+  chmod +x ./imjtool
+fi

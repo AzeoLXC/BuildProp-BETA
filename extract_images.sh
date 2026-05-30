@@ -1,176 +1,155 @@
 #!/bin/bash
+# extract_images.sh - Download, extract, and build Pixel prop modules from OTA/factory images
+# shellcheck shell=bash
 
-# Using util_functions.sh
-[ -f "util_functions.sh" ] && . ./util_functions.sh || { echo "util_functions.sh not found" && exit 1; }
+[ -f "utils.sh" ] && . ./utils.sh || { echo "[ERROR] utils.sh not found"; exit 1; }
 
-# Extracted image paths
-EI="./extracted_images"
-EAI="./extracted_archive_images"
-EI_BP="${EI##"./"}"
-EAI_BP="${EAI##"./"}"
+# ---------------------------------------------------------------------------
+# Directory layout
+# ---------------------------------------------------------------------------
+readonly EI="./extracted_images"
+readonly EAI="./extracted_archive_images"
+readonly EI_BP="${EI##"./"}"
+readonly EAI_BP="${EAI##"./"}"
 
-# Extract payload as ota or system image if factory
-[ -d "dl" ] && print_message "Extracting images from the Android OTA update package or factory image…\n" info
-for file in ./dl/*; do                                      # Iterate through files in the directory ./dl/*
-	if [ -f "${file:?}" ] && [ "${file: -4}" == ".zip" ]; then # Check if it is a ZIP file
-		filename="${file##*/}"                                    # Extract the filename (remove the path)
-		basename="${filename%.*}"                                 # Extract the basename (remove the extension)
-		# devicename="${basename%%-*}"                              # Extract the device name (remove the extension)
-		print_message "Processing \"$filename\"…" info
+# ---------------------------------------------------------------------------
+# Step 1: Unpack downloaded ZIP archives → payload.bin or raw images
+# ---------------------------------------------------------------------------
+if [ -d "dl" ]; then
+  print_message "Extracting images from downloaded OTA / factory archives..." info
 
-		# Time the extraction
-		extraction_start=$(date +%s)
+  for file in ./dl/*; do
+    [[ -f "${file:?}" && "${file: -4}" == ".zip" ]] || continue
 
-		# Extract images
-		if unzip -l "$file" | grep -q "payload.bin"; then
-			print_message "Extracting OTA image…" debug
+    filename="${file##*/}"
+    basename="${filename%.*}"
 
-			# Skip image if it failed to get extracted
-			if ! 7z e "$file" -o"$EAI" "payload.bin" -r &>/dev/null; then
-				print_message "Failed to extract payload.bin from $file using 7z. Skipping…\n" warning
-				continue
-			fi
+    print_message "Processing \"$filename\"..." info
+    extraction_start=$(date +%s)
 
-			# If it managed to dump the payload then move it correspondingly.
-			mv -f "$EAI_BP/payload.bin" "$EAI/$basename.bin"
-			print_message "Saved to \"$EAI/$basename.bin\"." debug
-		else
-			print_message "Detected Factory image, Extracting everything…" debug
+    if unzip -l "$file" | grep -q "payload.bin"; then
+      print_message "OTA archive detected — extracting payload.bin..." debug
 
-			# Skip image if it failed to get extracted
-			if ! 7z e "$file" -o"$EAI_BP" -r -y &>/dev/null; then
-				print_message "Failed to extract everything from $file. Skipping…" warning
-				continue
-			fi
-		fi
+      if ! 7z e "$file" -o"$EAI" "payload.bin" -r &>/dev/null; then
+        print_message "Failed to extract payload.bin from $file. Skipping..." warning
+        continue
+      fi
 
-		# We dont need the downloaded archive image anymore
-		rm "$file"
+      mv -f "$EAI_BP/payload.bin" "$EAI/$basename.bin"
+      print_message "Saved to \"$EAI/$basename.bin\"." debug
+    else
+      print_message "Factory image detected — extracting all contents..." debug
 
-		# Time the extraction
-		extraction_end=$(date +%s)
-		extraction_runtime=$((extraction_end - extraction_start))
+      if ! 7z e "$file" -o"$EAI_BP" -r -y &>/dev/null; then
+        print_message "Failed to extract $file. Skipping..." warning
+        continue
+      fi
+    fi
 
-		# Print the time
-		print_message "Extraction time: $extraction_runtime seconds\n" debug
-	fi
-done
+    rm -f "$file"
 
-if [ -d "$EAI_BP" ]; then
-	if [ -n "$(ls -A "$EAI_BP"/*.{zip,bin} 2>/dev/null)" ]; then
-		print_message "Dumping images from \"$EAI_BP\"…\n" info
-
-		for file in "$EAI"/*.{zip,bin}; do                                         # List directory zip & bin files
-			if [ -f "${file:?}" ] && [[ "$file" == *.zip || "$file" == *.bin ]]; then # Check if file is a zip or bin file
-				filename="${file##*/}"                                                   # Remove the path
-				basename="${filename%.*}"                                                # Remove the extension
-				print_message "Processing \"$filename\"…" info
-
-				# Time the extraction
-				extraction_start=$(date +%s)
-
-				# Extract/Dump
-				if [ "${file: -4}" == ".bin" ]; then # If is payload use the Android OTA Dumper
-					# Format the patitions to dump for argument usage
-					partitionsArgs=$(
-						IFS=,
-						echo "${PARTITIONS2EXTRACT[*]}"
-					)
-
-					# Skip image if it failed to get extracted
-					if ! payload_dumper "$file" --partitions="$partitionsArgs" --out="$EI_BP/$basename" 2>/dev/null; then
-						print_message "Failed to extract $file using Android OTA Dumper. Skipping…\n" warning
-						rm -rf "$EI_BP/$basename" # TODO: Use "${var:?}" to ensure this never expands to / .
-						continue
-					fi
-				else # Else directly extract all the required image using 7z
-					for image_name in "${PARTITIONS2EXTRACT[@]}"; do
-						print_message "Extracting \"$image_name\"…" debug
-
-						# Skip image if it failed to get extracted
-						if ! 7z e "$file" -o"$EI_BP/$basename" "$image_name.img" -r &>/dev/null; then
-							print_message "Failed to extract $image_name.img from $file using 7z. Skipping…\n" warning
-							rm -rf "$EI_BP/$basename/$image_name.img"
-							continue
-						fi
-					done
-				fi
-
-				# We dont need the image anymore
-				rm "$file"
-
-				# Time the extraction
-				extraction_end=$(date +%s)
-				extraction_runtime=$((extraction_end - extraction_start))
-
-				# Print the time
-				print_message "Extraction time: $extraction_runtime seconds\n" debug
-			fi
-		done
-	else
-		print_message "The directory \"$EAI_BP\" does not have any ZIP or BIN files.\n" error
-	fi
+    extraction_end=$(date +%s)
+    print_message "Extraction completed in $((extraction_end - extraction_start))s." debug
+  done
 fi
 
-# Extract the images directories
-[ -d "$EI" ] && print_message "Extracting images…\n" info
-for dir in "$EI"/*; do  # List directory ./*
-	if [ -d "$dir" ]; then # Check if it is a directory
-		dir=${dir%*/}         # Remove last /
-		print_message "Processing \"${dir##*/}\"…" info
+# ---------------------------------------------------------------------------
+# Step 2: Dump partition images from payload.bin / nested ZIPs
+# ---------------------------------------------------------------------------
+if [ -d "$EAI_BP" ] && [ -n "$(ls -A "$EAI_BP"/*.{zip,bin} 2>/dev/null)" ]; then
+  print_message "Dumping partition images from \"$EAI_BP\"..." info
 
-		# Time the extraction
-		extraction_start=$(date +%s)
+  for file in "$EAI"/*.{zip,bin}; do
+    [[ -f "${file:?}" && ("$file" == *.zip || "$file" == *.bin) ]] || continue
 
-		# Extract all and clean
-		for image_name in "${PARTITIONS2EXTRACT[@]}"; do
-			if [ -f "$dir/$image_name.img" ]; then
-				extract_image "$dir" "$image_name"
-				rm "$dir/$image_name.img"
-			fi
-		done
+    filename="${file##*/}"
+    basename="${filename%.*}"
 
-		# Time the extraction
-		extraction_end=$(date +%s)
-		extraction_runtime=$((extraction_end - extraction_start))
+    print_message "Processing \"$filename\"..." info
+    extraction_start=$(date +%s)
 
-		# Print the extraction time
-		print_message "Extraction time: $extraction_runtime seconds\n" debug
-	fi
-done
+    if [[ "${file: -4}" == ".bin" ]]; then
+      # OTA payload — use payload_dumper
+      partitionsArgs=$(IFS=,; echo "${PARTITIONS2EXTRACT[*]}")
 
-# Build props, feature and module files after extraction
-[ -d "$EI" ] && print_message "Building module props and features…\n" info
-for dir in "$EI"/*; do  # List directory ./*
-	if [ -d "$dir" ]; then # Check if it is a directory
-		dir=${dir%*/}         # Remove last /
-		print_message "Processing \"${dir##*/}\"…" info
+      if ! payload_dumper "$file" --partitions="$partitionsArgs" --out="$EI_BP/$basename" 2>/dev/null; then
+        print_message "payload_dumper failed on $file. Skipping..." warning
+        rm -rf "${EI_BP:?}/$basename"
+        continue
+      fi
+    else
+      # Factory ZIP — extract individual partition images with 7z
+      for image_name in "${PARTITIONS2EXTRACT[@]}"; do
+        print_message "Extracting \"$image_name\"..." debug
 
-		# Time the extraction
-		extraction_start=$(date +%s)
+        if ! 7z e "$file" -o"$EI_BP/$basename" "$image_name.img" -r &>/dev/null; then
+          print_message "Failed to extract $image_name.img from $file. Skipping..." warning
+          rm -f "$EI_BP/$basename/$image_name.img"
+        fi
+      done
+    fi
 
-		# Build system.prop
-		print_message "Building props…" info
-		./build_props.sh "$dir"
+    rm -f "$file"
 
-		# Build product sysconfig for Pixel Experience features
-		print_message "Building sysconfig features…" info
-		./build_sysconfig.sh "$dir"
+    extraction_end=$(date +%s)
+    print_message "Dump completed in $((extraction_end - extraction_start))s." debug
+  done
+else
+  [ -d "$EAI_BP" ] && print_message "No ZIP or BIN files found in \"$EAI_BP\"." warning
+fi
 
-		# Build media bootanimation
-		# (Optional) It increases the module size significantly!
-		# print_message "Building media bootanimation…" info
-		# ./build_bootanimation.sh "$dir"
+# ---------------------------------------------------------------------------
+# Step 3: Mount / extract partition images into filesystem trees
+# ---------------------------------------------------------------------------
+if [ -d "$EI" ]; then
+  print_message "Extracting partition images..." info
 
-		# Build Magisk module
-		print_message "Building module…" info
-		./build_module.sh "$dir"
+  for dir in "$EI"/*/; do
+    dir="${dir%/}"
+    [[ -d "$dir" ]] || continue
 
-		# Time the extraction
-		extraction_end=$(date +%s)
-		extraction_runtime=$((extraction_end - extraction_start))
+    print_message "Processing \"${dir##*/}\"..." info
+    extraction_start=$(date +%s)
 
-		# Print the build time
-		print_message "Build time: $extraction_runtime seconds\n" debug
-	fi
-done
+    for image_name in "${PARTITIONS2EXTRACT[@]}"; do
+      if [ -f "$dir/$image_name.img" ]; then
+        extract_image "$dir" "$image_name"
+        rm -f "$dir/$image_name.img"
+      fi
+    done
+
+    extraction_end=$(date +%s)
+    print_message "Image extraction completed in $((extraction_end - extraction_start))s." debug
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Build props, sysconfig, and module zip for each device
+# ---------------------------------------------------------------------------
+if [ -d "$EI" ]; then
+  print_message "Building module props and features..." info
+
+  for dir in "$EI"/*/; do
+    dir="${dir%/}"
+    [[ -d "$dir" ]] || continue
+
+    print_message "Processing \"${dir##*/}\"..." info
+    extraction_start=$(date +%s)
+
+    print_message "Building system.prop / module.prop..." info
+    ./build_props.sh "$dir"
+
+    print_message "Building sysconfig features..." info
+    ./build_sysconfig.sh "$dir"
+
+    # Optional: significantly increases module size
+    # print_message "Building bootanimation..." info
+    # ./build_bootanimation.sh "$dir"
+
+    print_message "Building Magisk/KernelSU module..." info
+    ./build_module.sh "$dir"
+
+    extraction_end=$(date +%s)
+    print_message "Build completed in $((extraction_end - extraction_start))s." debug
+  done
+fi

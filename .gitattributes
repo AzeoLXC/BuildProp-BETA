@@ -9,9 +9,6 @@
 # README.md should also have consistent line endings
 README.md text eol=lf
 
-# Mark shell scripts as text and enforce LF
-*.sh text eol=lf
-
 # Binary files
 *.png binary
 *.jpg binary

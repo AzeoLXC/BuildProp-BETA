@@ -1,74 +1,139 @@
-# Pixel Prop Builder: Streamlined OTA to Build.prop Conversion
+# Pixel Props — BETA
 
-This automation suite efficiently extracts and manages system properties from Pixel OTA updates. Designed for developers and system administrators, it simplifies the process of accessing and customizing Android build properties.
+> Magisk / KernelSU / APatch module that spoofs your device's build properties to a Google Pixel,
+> enabling Strong Play Integrity attestation and Pixel-exclusive features.
 
-## Quick Start
+[![Build](https://github.com/AzeoLXC/BuildProp-BETA/actions/workflows/build.yml/badge.svg)](https://github.com/AzeoLXC/BuildProp-BETA/actions/workflows/build.yml)
 
-### Prerequisites
+---
 
-* **Environment**: A Unix-like operating system running Linux or macOS with Bash.
-* **Core Utilities**: Ensure the installation of `dos2unix`, `aria2`, `zip`, `unzip`, `p7zip`, and `curl`.
-* **Python Runtime**: Python 3.8 or higher is required.
+## Features
 
-```bash
-sudo apt-get update -y
-sudo apt-get install python3 python3-pip python3-venv -y
+- Spoof `build.prop` properties across all partitions (product, vendor, system, ODM, …)
+- Automatic PlayIntegrityFix (`pif.json`) generation or download
+- Automatic TrickyStore (`target.txt`) generation with TEE-broken detection
+- SHA-256 integrity verification of all module scripts at install time
+- Supports **Magisk**, **KernelSU**, and **APatch**
 
-```
+---
 
-## Installation
-
-1. **Clone the repository**: Download the source code along with its submodules.
-
-```bash
-git clone --recurse https://github.com/Elcapitanoe/Build-Prop-BETA && cd Build-Prop-BETA
+## Repository Structure
 
 ```
-
-2. **Configure virtual environment**: It is recommended to isolate dependencies using a virtual environment.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-
+.
+├── utils.sh                  # Shared utility functions (logging, pkg mgmt, prop helpers)
+├── requirements.sh           # Dependency checker / installer
+├── download_ota.sh           # Download latest OTA / factory images from Google
+├── extract_images.sh         # Extract partition images and orchestrate full build pipeline
+├── build_props.sh            # Build system.prop + module.prop from extracted images
+├── build_sysconfig.sh        # Copy Pixel sysconfig XML features into module tree
+├── build_bootanimation.sh    # (Optional) Copy bootanimation into module tree
+├── build_module.sh           # Assemble and zip the final Magisk/KernelSU module
+└── module/                   # Module template files (installed on device)
+    ├── utils.sh              # On-device property helpers
+    ├── action.sh             # Interactive action: PIF + TrickyStore config
+    ├── customize.sh          # Magisk install script
+    ├── service.sh            # Post-boot service hook
+    ├── post-fs-data.sh       # Early-boot hook
+    ├── gms_doze.sh           # GMS doze optimisation
+    ├── uninstall.sh          # Clean uninstall hook
+    ├── config.prop           # User-configurable module settings
+    └── META-INF/             # Magisk installer metadata
 ```
 
-3. **Install dependencies**: Install the required Python packages.
+---
 
-```bash
-python3 -m pip install payload_dumper --break-system-packages
+## Prerequisites
 
-```
+| Tool | Purpose |
+|------|---------|
+| `bash` ≥ 5 | Script runtime |
+| `aria2` | Multi-connection OTA downloads |
+| `p7zip-full` | ZIP / image extraction |
+| `zip` | Module packaging |
+| `python3` + `pip` | payload_dumper dependency |
+| `payload_dumper` | Android OTA payload extraction |
+
+Run `bash utils.sh` once to auto-install all dependencies (requires `sudo`).
+
+---
 
 ## Usage
 
-1. **Obtain Firmware Images**: Identify the required factory or OTA images from the official Google Android Images repository, Android 15, Android 16, or Android 17 release channels.
-2. **Fetch Latest Builds**: Execute the download script using the specific device codenames and their target branch suffixes.
-* Example command: `./download_latest_ota_build.sh komodo komodo_beta15 komodo_beta16 komodo_beta17`
+### 1 — Download OTA
 
-3. **Extract System Images**: Place the downloaded archive files within the project workspace. Run `./extract_images.sh` to automatically extract the images and parse their build properties into the `result/` directory.
-4. **Compile Magisk Module**: Run `./build_module.sh` to aggregate the extracted data and compile the final module from the generated results.
+```bash
+# Stable release
+bash download_ota.sh husky shiba
 
-## Key Features
+# Beta release
+bash download_ota.sh husky_beta16 shiba_beta16
 
-* **Automated Payload Acquisition**: Downloads the latest stable and beta builds directly from Google's official developer servers.
-* **Unified Image Extraction**: Processes and extracts system images from both full factory images and incremental OTA updates.
-* **Automated Prop Generation**: Parses extracted system components to systematically generate accurate `build.prop` files.
-* **Core Module System (service.sh)**: Implements a Safe Mode to prevent critical system configuration conflicts. It integrates Sensitive Props Mod features securely and utilizes PIHooks for dynamic, module-based property spoofing. PIHooks automatically deactivates if a properly configured Play Integrity Fix module is detected.
-* **Ancillary Module System (action.sh)**: Automates the compilation of `PIF.json` configurations specifically for Beta OTA builds. It also manages TrickyStore target application lists and handles broken TEE status automatically.
-* **Continuous Integration**: Leverages GitHub Actions for scheduled build pipelines, intelligent duplicate release prevention, and automated deployment notifications via Telegram.
-* **Extensibility**: Framework ready for future integrations, including the compilation of Pixel-specific features such as `sysconfigs`.
+# QPR beta
+bash download_ota.sh husky_beta16qpr1
+```
 
-## Responsible Usage Guidelines
+### 2 — Full pipeline (extract → build props → package)
 
-This project is published strictly for educational and experimental purposes. Operators must utilize this tool responsibly.
+```bash
+bash extract_images.sh
+```
 
-* **Code Auditing**: Thoroughly review the codebase before executing scripts in any production or personal environment.
-* **Security Compliance**: Adhere to established industry standards regarding system security and device integrity.
+The built `.zip` modules are written to `./result/`.
 
-The maintainers of this repository assume no liability for system instability, data loss, or any damages resulting from the use of these tools.
+### 3 — Individual build steps
 
-## Credit & Support
+```bash
+# Build props only for a specific extracted directory
+bash build_props.sh ./extracted_images/husky_AB12
 
--   **Core Logic:** [@0x11DFE](https://github.com/0x11DFE)
--   **Feedback:** Found a bug? Open a ticket on the [Issues Page](https://github.com/Elcapitanoe/Build-Prop-BETA/issues).
+# Build the module zip only
+bash build_module.sh ./extracted_images/husky_AB12
+```
+
+---
+
+## GitHub Actions
+
+The workflow at `.github/workflows/build.yml` supports:
+
+- **Manual trigger** (`workflow_dispatch`) — provide a comma-separated device list:
+  ```
+  husky,shiba,husky_beta16
+  ```
+- **Scheduled trigger** — runs every Monday at 00:00 UTC against a default device set.
+
+On success the workflow creates a GitHub Release containing the module `.zip` files.
+
+---
+
+## Module Installation
+
+1. Download the `.zip` for your device from [Releases](https://github.com/AzeoLXC/BuildProp-BETA/releases).
+2. Flash via **Magisk** / **KernelSU** / **APatch**.
+3. Reboot.
+4. Tap the module **Action** button to configure PlayIntegrityFix and TrickyStore.
+5. Verify with [Play Integrity API Checker](https://play.google.com/store/apps/details?id=gr.nikolasspyr.integritycheck).
+
+---
+
+## Configuration (`module/config.prop`)
+
+```properties
+# Set to false to disable sensitive prop checks (useful if no hardware volume keys)
+pixelprops.sensitive.props=true
+pixelprops.sensitive.pihooks=true
+```
+
+---
+
+## Support
+
+- Telegram channel: [t.me/PixelProps](https://t.me/PixelProps)
+- Script author: [@T3SL4](https://t.me/T3SL4)
+
+---
+
+## License
+
+See [LICENSE](LICENSE).

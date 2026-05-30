@@ -1,0 +1,140 @@
+name: Build Pixel Props Module
+
+on:
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: >
+          Comma-separated device targets.
+          Format: <codename> (stable) | <codename>_beta<ver> (beta) | <codename>_beta<ver>qpr<n> (QPR beta)
+          Example: husky,shiba,husky_beta16,husky_beta16qpr1
+        required: true
+        type: string
+
+  schedule:
+    # Run every Monday at 00:00 UTC
+    - cron: "0 0 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build — ${{ github.event.inputs.devices || 'scheduled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # -----------------------------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 \
+            p7zip-full \
+            zip \
+            dos2unix \
+            unzip
+
+      # -----------------------------------------------------------------------
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install payload-dumper-go || python3 -m pip install payload_dumper
+
+      # -----------------------------------------------------------------------
+      - name: Resolve device targets
+        id: targets
+        run: |
+          if [[ -n "${{ github.event.inputs.devices }}" ]]; then
+            # Manual trigger — use provided device list
+            DEVICES="${{ github.event.inputs.devices }}"
+          else
+            # Scheduled trigger — default to latest Pixel flagship (beta)
+            DEVICES="husky_beta16,shiba_beta16"
+          fi
+          # Convert comma-separated list to space-separated for bash
+          echo "device_list=${DEVICES//,/ }" >> "$GITHUB_OUTPUT"
+          echo "Resolved targets: $DEVICES"
+
+      # -----------------------------------------------------------------------
+      - name: Download OTA payloads
+        run: |
+          chmod +x download_ota.sh utils.sh
+          # Pass each device as a separate argument
+          # shellcheck disable=SC2086
+          bash download_ota.sh ${{ steps.targets.outputs.device_list }}
+
+      # -----------------------------------------------------------------------
+      - name: Extract images and build modules
+        id: build
+        run: |
+          chmod +x extract_images.sh build_props.sh build_sysconfig.sh build_module.sh
+          bash extract_images.sh
+
+      # -----------------------------------------------------------------------
+      - name: Collect build artifacts
+        id: artifacts
+        run: |
+          ZIPS=$(find . -maxdepth 1 -name "*.zip" -printf "%f\n" | sort | tr '\n' ' ')
+          echo "zip_files=${ZIPS}" >> "$GITHUB_OUTPUT"
+
+          # Aggregate metadata from all built modules
+          NAMES=""
+          PATCHES=""
+          for zip in *.zip; do
+            [ -f "$zip" ] || continue
+            base="${zip%.zip}"
+            NAMES="${NAMES:+$NAMES, }$base"
+          done
+          echo "module_names=${NAMES}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-props-modules-${{ steps.artifacts.outputs.build_date }}
+          path: "*.zip"
+          if-no-files-found: error
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: ${{ steps.artifacts.outputs.zip_files != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ steps.artifacts.outputs.build_date }}-${{ github.run_number }}
+          name: "Pixel Props — ${{ steps.artifacts.outputs.build_date }}"
+          body: |
+            ## Pixel Props Module Build
+
+            **Date:** ${{ steps.artifacts.outputs.build_date }}
+            **Modules:** ${{ steps.artifacts.outputs.module_names }}
+            **Triggered by:** ${{ github.event_name == 'schedule' && 'Scheduled run' || github.actor }}
+
+            ### Installation
+            1. Download the `.zip` file for your device.
+            2. Flash via **Magisk**, **KernelSU**, or **APatch**.
+            3. Reboot and verify attestation with [Play Integrity API Checker](https://play.google.com/store/apps/details?id=gr.nikolasspyr.integritycheck).
+
+            ### Support
+            - Telegram: [t.me/PixelProps](https://t.me/PixelProps)
+          files: "*.zip"
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

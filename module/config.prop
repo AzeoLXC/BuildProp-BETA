@@ -1,4 +1,4 @@
-# You can set those manually if you don't have phisical volume keys.
+# You can set those manually if you don't have physical volume keys.
 #
 # On sensitive key, values when true are basically meant,
 # to set and use the sensitive checks, else when false will ignore the check.

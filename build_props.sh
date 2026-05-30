@@ -1,41 +1,49 @@
 #!/bin/bash
+# build_props.sh - Extract and build system.prop + module.prop from extracted partition images
+# shellcheck shell=bash
 
-# Using util_functions.sh
-[ -f "util_functions.sh" ] && . ./util_functions.sh || { echo "util_functions.sh not found" && exit 1; }
+# Source shared utilities
+[ -f "utils.sh" ] && . ./utils.sh || { echo "[ERROR] utils.sh not found"; exit 1; }
 
-# Start processing directories (default to ./extracted_images)
+# Process directories (enumerate or use explicit target from $1)
 process_directories "${BASH_SOURCE[0]}" "$1"
 
-# Define the props path
-declare EXT_PROP_FILES=$(find_prop_files "$dir")
+# ---------------------------------------------------------------------------
+# Locate and load property files
+# ---------------------------------------------------------------------------
+EXT_PROP_FILES=$(find_prop_files "$dir")
+# shellcheck disable=SC2086
+EXT_PROP_CONTENT=$(cat $EXT_PROP_FILES)
 
-# Store the content of all prop files in a variable
-declare EXT_PROP_CONTENT=$(cat $EXT_PROP_FILES)
+# ---------------------------------------------------------------------------
+# Resolve attestation properties (product > vendor fallback)
+# ---------------------------------------------------------------------------
+brand_for_attestation="$(grep_prop "ro.product.brand_for_attestation"        "$EXT_PROP_CONTENT")"
+[ -z "$brand_for_attestation" ] && \
+  brand_for_attestation="$(grep_prop "ro.product.vendor.brand"               "$EXT_PROP_CONTENT")"
 
-# Building props config from there
+device_for_attestation="$(grep_prop "ro.product.device_for_attestation"      "$EXT_PROP_CONTENT")"
+[ -z "$device_for_attestation" ] && \
+  device_for_attestation="$(grep_prop "ro.product.vendor.device"             "$EXT_PROP_CONTENT")"
+
+manufacturer_for_attestation="$(grep_prop "ro.product.manufacturer_for_attestation" "$EXT_PROP_CONTENT")"
+[ -z "$manufacturer_for_attestation" ] && \
+  manufacturer_for_attestation="$(grep_prop "ro.product.vendor.manufacturer" "$EXT_PROP_CONTENT")"
+
+model_for_attestation="$(grep_prop "ro.product.model_for_attestation"        "$EXT_PROP_CONTENT")"
+[ -z "$model_for_attestation" ] && \
+  model_for_attestation="$(grep_prop "ro.product.vendor.model"               "$EXT_PROP_CONTENT")"
+
+name_for_attestation="$(grep_prop "ro.product.name_for_attestation"          "$EXT_PROP_CONTENT")"
+[ -z "$name_for_attestation" ] && \
+  name_for_attestation="$(grep_prop "ro.product.vendor.name"                 "$EXT_PROP_CONTENT")"
+
+# ---------------------------------------------------------------------------
+# Build system.prop
+# ---------------------------------------------------------------------------
 system_prop=""
 module_prop=""
 
-###
-# System Props
-###
-
-brand_for_attestation="$(grep_prop "ro.product.brand_for_attestation" "$EXT_PROP_CONTENT")"
-[ -z "$brand_for_attestation" ] && brand_for_attestation="$(grep_prop "ro.product.vendor.brand" "$EXT_PROP_CONTENT")"
-
-device_for_attestation="$(grep_prop "ro.product.device_for_attestation" "$EXT_PROP_CONTENT")"
-[ -z "$device_for_attestation" ] && device_for_attestation="$(grep_prop "ro.product.vendor.device" "$EXT_PROP_CONTENT")"
-
-manufacturer_for_attestation="$(grep_prop "ro.product.manufacturer_for_attestation" "$EXT_PROP_CONTENT")"
-[ -z "$manufacturer_for_attestation" ] && manufacturer_for_attestation="$(grep_prop "ro.product.vendor.manufacturer" "$EXT_PROP_CONTENT")"
-
-model_for_attestation="$(grep_prop "ro.product.model_for_attestation" "$EXT_PROP_CONTENT")"
-[ -z "$model_for_attestation" ] && model_for_attestation="$(grep_prop "ro.product.vendor.model" "$EXT_PROP_CONTENT")"
-
-name_for_attestation="$(grep_prop "ro.product.name_for_attestation" "$EXT_PROP_CONTENT")"
-[ -z "$name_for_attestation" ] && name_for_attestation="$(grep_prop "ro.product.vendor.name" "$EXT_PROP_CONTENT")"
-
-# Build our system.prop
 to_system_prop "##
 # Beautiful Pixel Props https://t.me/PixelProps
 # Script By @T3SL4 and Built By @domi_adiwijaya
@@ -50,11 +58,11 @@ to_system_prop "##
 ###
 
 # begin common build properties"
-add_prop_as_ini to_system_prop "ro.product.brand" "$brand_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.device" "$device_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.brand"        "$brand_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.device"       "$device_for_attestation"
 add_prop_as_ini to_system_prop "ro.product.manufacturer" "$manufacturer_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.model" "$model_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.name" "$name_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.model"        "$model_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.name"         "$name_for_attestation"
 build_system_prop "ro.product.product.brand"
 build_system_prop "ro.product.product.device"
 build_system_prop "ro.product.product.manufacturer"
@@ -88,21 +96,21 @@ build_system_prop "ro.quick_start.device_id"
 to_system_prop "# end PRODUCT_PRODUCT_PROPERTIES
 
 # begin PRODUCT_BOOTIMAGE_PROPERTIES"
-add_prop_as_ini to_system_prop "ro.product.bootimage.brand" "$brand_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.bootimage.device" "$device_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.bootimage.brand"        "$brand_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.bootimage.device"       "$device_for_attestation"
 add_prop_as_ini to_system_prop "ro.product.bootimage.manufacturer" "$manufacturer_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.bootimage.model" "$model_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.bootimage.name" "$name_for_attestation"
-add_prop_as_ini to_system_prop "ro.bootimage.build.date" "$(grep_prop "ro.vendor.build.date" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.date.utc" "$(grep_prop "ro.vendor.build.date.utc" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.fingerprint" "$(grep_prop "ro.vendor.build.fingerprint" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.id" "$(grep_prop "ro.vendor.build.id" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.tags" "$(grep_prop "ro.vendor.build.tags" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.type" "$(grep_prop "ro.vendor.build.type" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.version.incremental" "$(grep_prop "ro.vendor.build.version.incremental" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.version.release" "$(grep_prop "ro.vendor.build.version.release" "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.product.bootimage.model"        "$model_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.bootimage.name"         "$name_for_attestation"
+add_prop_as_ini to_system_prop "ro.bootimage.build.date"                    "$(grep_prop "ro.vendor.build.date"                    "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.date.utc"               "$(grep_prop "ro.vendor.build.date.utc"               "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.fingerprint"            "$(grep_prop "ro.vendor.build.fingerprint"            "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.id"                     "$(grep_prop "ro.vendor.build.id"                     "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.tags"                   "$(grep_prop "ro.vendor.build.tags"                   "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.type"                   "$(grep_prop "ro.vendor.build.type"                   "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.version.incremental"    "$(grep_prop "ro.vendor.build.version.incremental"    "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.version.release"        "$(grep_prop "ro.vendor.build.version.release"        "$EXT_PROP_CONTENT")"
 add_prop_as_ini to_system_prop "ro.bootimage.build.version.release_or_codename" "$(grep_prop "ro.vendor.build.version.release_or_codename" "$EXT_PROP_CONTENT")"
-add_prop_as_ini to_system_prop "ro.bootimage.build.version.sdk" "$(grep_prop "ro.vendor.build.version.sdk" "$EXT_PROP_CONTENT")"
+add_prop_as_ini to_system_prop "ro.bootimage.build.version.sdk"            "$(grep_prop "ro.vendor.build.version.sdk"            "$EXT_PROP_CONTENT")"
 to_system_prop "# end PRODUCT_BOOTIMAGE_PROPERTIES
 
 ###
@@ -138,16 +146,11 @@ to_system_prop "# end common build properties
 # begin PRODUCT_VENDOR_PROPERTIES"
 build_system_prop "ro.soc.model"
 build_system_prop "ro.soc.manufacturer"
-# build_system_prop "ro.hardware.egl"
-# build_system_prop "ro.hardware.vulkan"
 to_system_prop "# end PRODUCT_VENDOR_PROPERTIES
 
 # begin ADDITIONAL_VENDOR_PROPERTIES"
 build_system_prop "ro.product.first_api_level"
 build_system_prop "ro.vendor.build.security_patch"
-# build_system_prop "ro.product.board"
-# build_system_prop "ro.board.platform"
-# add_prop_as_ini to_system_prop "ro.hardware" "$device_for_attestation"
 to_system_prop "# end ADDITIONAL_VENDOR_PROPERTIES
 
 # begin PRODUCT_PROPERTY_OVERRIDES"
@@ -161,7 +164,6 @@ build_system_prop "persist.vendor.enable.thermal.genl"
 build_system_prop "ro.incremental.enable"
 build_system_prop "ro.build.device_family"
 add_prop_as_ini to_system_prop "vendor.usb.product_string" "$model_for_attestation"
-# add_prop_as_ini to_system_prop "bluetooth.device.default_name" "$model_for_attestation"
 to_system_prop "# end PRODUCT_PROPERTY_OVERRIDES
 
 ###
@@ -302,7 +304,7 @@ to_system_prop "# end build properties
 
 # begin PRODUCT_SYSTEM_PROPERTIES"
 build_system_prop "ro.hotword.detection_service_required"
-to_system_prop "#end PRODUCT_SYSTEM_PROPERTIES
+to_system_prop "# end PRODUCT_SYSTEM_PROPERTIES
 
 ###
 # end system/system/build.prop
@@ -365,48 +367,45 @@ to_system_prop "# end common build properties
 ###
 
 ###
-# begin of custom props
+# begin custom props
 ###
 
 # begin common build properties"
-add_prop_as_ini to_system_prop "ro.boot.hwname" "$device_for_attestation"
-add_prop_as_ini to_system_prop "ro.boot.hwdevice" "$device_for_attestation"
-add_prop_as_ini to_system_prop "ro.product.hardware.sku" "$device_for_attestation"
+add_prop_as_ini to_system_prop "ro.boot.hwname"               "$device_for_attestation"
+add_prop_as_ini to_system_prop "ro.boot.hwdevice"             "$device_for_attestation"
+add_prop_as_ini to_system_prop "ro.product.hardware.sku"      "$device_for_attestation"
 add_prop_as_ini to_system_prop "ro.boot.product.hardware.sku" "$device_for_attestation"
 to_system_prop "# end common build properties
 
 ###
-# end of custom props
+# end custom props
 ###"
 
-# Save the system.prop file
-echo -n "${system_prop::-1}" >"$dir/system.prop"
+# Write system.prop (strip trailing newline)
+printf '%s' "${system_prop%$'\n'}" >"$dir/system.prop"
 
-###
-# Module Props
-###
+# ---------------------------------------------------------------------------
+# Build module.prop
+# ---------------------------------------------------------------------------
 device_name=$model_for_attestation
-device_build_description=$(grep_prop "ro.build.description" "$EXT_PROP_CONTENT")
-device_codename=$(grep_prop "ro.product.vendor.name" "$EXT_PROP_CONTENT")
+device_build_description=$(grep_prop "ro.build.description"         "$EXT_PROP_CONTENT")
+device_codename=$(grep_prop         "ro.product.vendor.name"        "$EXT_PROP_CONTENT")
 device_build_security_patch=$(grep_prop "ro.vendor.build.security_patch" "$EXT_PROP_CONTENT")
-device_build_fingerprint=$(grep_prop "ro.product.build.id" "$EXT_PROP_CONTENT")
-device_build_id=$(grep_prop "ro.build.id" "$EXT_PROP_CONTENT")
-base_name="${device_codename}_$device_build_id"
+device_build_fingerprint=$(grep_prop    "ro.product.build.id"       "$EXT_PROP_CONTENT")
+device_build_id=$(grep_prop             "ro.build.id"               "$EXT_PROP_CONTENT")
 
-add_prop_as_ini to_module_prop "id" "${device_codename^}_Props"
-add_prop_as_ini to_module_prop "name" "$device_name (${device_codename^^}) Props"
-add_prop_as_ini to_module_prop "version" "$device_build_security_patch"
+add_prop_as_ini to_module_prop "id"          "${device_codename^}_Props"
+add_prop_as_ini to_module_prop "name"        "$device_name (${device_codename^^}) Props"
+add_prop_as_ini to_module_prop "version"     "$device_build_security_patch"
 add_prop_as_ini to_module_prop "versionCode" "$(echo "$device_build_security_patch" | tr -d - | cut -c3-)"
-add_prop_as_ini to_module_prop "author" "Tesla & Domi"
-add_prop_as_ini to_module_prop "description" "Spoof your device props to ${device_codename^^} [$device_build_fingerprint] ($(date --date="$device_build_security_patch" +%b) $(date --date="$device_build_security_patch" +%Y))"
-add_prop_as_ini to_module_prop "donate" "https://wannabe1337.page.link/4xK6"
+add_prop_as_ini to_module_prop "author"      "Tesla & Domi"
+add_prop_as_ini to_module_prop "description" \
+  "Spoof your device props to ${device_codename^^} [$device_build_fingerprint] ($(date --date="$device_build_security_patch" +%b) $(date --date="$device_build_security_patch" +%Y))"
+add_prop_as_ini to_module_prop "donate"  "https://wannabe1337.page.link/4xK6"
 add_prop_as_ini to_module_prop "support" "https://t.me/PixelProps"
 
-# Save the module.prop file
-echo -n "${module_prop::-1}" >"$dir/module.prop"
+# Write module.prop (strip trailing newline)
+printf '%s' "${module_prop%$'\n'}" >"$dir/module.prop"
 
-# Display information about prop
 print_message "Built props for $device_name [$device_build_description]!" info
-
-# Display saving location
 print_message "Props saved to \"${dir}\"" debug
