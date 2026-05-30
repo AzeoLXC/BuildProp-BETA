@@ -1,0 +1,34 @@
+name: Keep Actions Alive
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # At 00:00 on the 1st of every month (UTC)
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    name: Prevent scheduled workflow cancellation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update automated activity timestamp
+        run: |
+          mkdir -p .github
+          echo "Last automated activity: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > .github/last-activity
+
+      - name: Commit and push activity timestamp
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-activity
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update automated activity timestamp to prevent schedule cancellation"
+            git push
+          fi
