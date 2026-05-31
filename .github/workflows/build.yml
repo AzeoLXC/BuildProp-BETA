@@ -1,5 +1,8 @@
 name: Build Pixel Props Module
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
     inputs:
@@ -189,18 +192,3 @@ jobs:
             --notes "${CURRENT_BODY}${APPEND}" \
             --repo "${{ github.repository }}"
 
-      # -----------------------------------------------------------------------
-      - name: Send to Telegram
-        if: steps.check_build.outputs.BUILD_EXISTS == 'false'
-        run: |
-          printf '%s - %s\n%s' \
-            "${{ steps.build.outputs.device_name }}" \
-            "${{ steps.build.outputs.device_codename }}" \
-            "${{ steps.build.outputs.device_build_description }}" \
-            > .tg_caption
-
-          curl -sSf -X POST \
-            "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendDocument" \
-            -F "chat_id=${{ secrets.CHANNEL_ID }}" \
-            -F "document=@${{ steps.build.outputs.module_base_name }}.zip;type=application/zip" \
-            -F "caption=<.tg_caption"
