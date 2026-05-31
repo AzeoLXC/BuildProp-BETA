@@ -21,7 +21,6 @@ fi
 # pip
 if ! python3 -m pip -V &>/dev/null; then
   print_message "pip not found — attempting to install via get-pip.py..." warning
-  local _pip_tmp
   _pip_tmp="$(mktemp)"
   if curl -fsSL "https://bootstrap.pypa.io/get-pip.py" -o "$_pip_tmp"; then
     python3 "$_pip_tmp" &>/dev/null
@@ -45,9 +44,9 @@ fi
 if [[ ! -f "./imjtool" ]]; then
   print_message "imjtool not found — downloading..." info
 
-  local _imj_url="https://newandroidbook.com/tools/imjtool"
-  local _max_attempts=3
-  local _attempt=0
+  _imj_url="https://newandroidbook.com/tools/imjtool"
+  _max_attempts=3
+  _attempt=0
 
   while [[ ! -f "./imjtool" ]] && (( _attempt < _max_attempts )); do
     _attempt=$(( _attempt + 1 ))
