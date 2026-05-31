@@ -7,22 +7,90 @@ on:
         description: >
           Comma-separated device targets.
           Format: <codename> (stable) | <codename>_beta<ver> (beta) | <codename>_beta<ver>qpr<n> (QPR beta)
-          Example: husky,shiba,husky_beta16,husky_beta16qpr1
-        required: true
+          Example: husky,shiba,husky_beta17q1,caiman_beta17q1
+          Leave empty to use the default scheduled device list.
+        required: false
         type: string
 
   schedule:
-    # Run every Monday at 00:00 UTC
-    - cron: "0 0 * * 1"
+    # Run on the 7th of every month at 13:37 UTC
+    - cron: '37 13 7 * *'
 
 permissions:
   contents: write
 
+# ---------------------------------------------------------------------------
+# Job 1 — Resolve targets & create the shared release
+# ---------------------------------------------------------------------------
 jobs:
-  build:
-    name: Build — ${{ github.event.inputs.devices || 'scheduled' }}
+  prepare:
+    name: Prepare — resolve targets & create release
     runs-on: ubuntu-latest
+    outputs:
+      tag_name:    ${{ steps.meta.outputs.tag_name }}
+      build_date:  ${{ steps.meta.outputs.build_date }}
+      matrix:      ${{ steps.meta.outputs.matrix }}
+
+    steps:
+      - name: Resolve targets & build metadata
+        id: meta
+        run: |
+          if [[ -n "${{ github.event.inputs.devices }}" ]]; then
+            DEVICES="${{ github.event.inputs.devices }}"
+          else
+            # Default scheduled device list — update when a new beta drops
+            DEVICES="rango_beta17q1,mustang_beta17q1,blazer_beta17q1,frankel_beta17q1,tegu_beta17q1,comet_beta17q1,komodo_beta17q1,caiman_beta17q1,tokay_beta17q1,akita_beta17q1,husky_beta17q1,shiba_beta17q1,tangorpro_beta17q1,felix_beta17q1"
+          fi
+
+          BUILD_DATE=$(date -u '+%Y-%m-%d')
+          TAG_NAME=$(date -u '+%Y%m%d')
+
+          # Convert comma-separated device list to JSON array for matrix
+          MATRIX=$(python3 -c "import json,sys; d='${DEVICES}'; print(json.dumps(d.split(',')))")
+
+          echo "tag_name=${TAG_NAME}"   >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+          echo "matrix=${MATRIX}"       >> "$GITHUB_OUTPUT"
+          echo "Resolved targets: ${DEVICES}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ steps.meta.outputs.tag_name }}
+          name:       "Pixel Props — ${{ steps.meta.outputs.build_date }}"
+          body: |
+            ## Pixel Props Module Build
+
+            **Date:** ${{ steps.meta.outputs.build_date }}
+            **Triggered by:** ${{ github.event_name == 'schedule' && 'Scheduled run' || github.actor }}
+
+            ### Installation
+            1. Download the `.zip` file for your device.
+            2. Flash via **Magisk**, **KernelSU**, or **APatch**.
+            3. Reboot and verify attestation with [Play Integrity API Checker](https://play.google.com/store/apps/details?id=gr.nikolasspyr.integritycheck).
+
+            ### Support
+            - Telegram: [t.me/PixelProps](https://t.me/PixelProps)
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# ---------------------------------------------------------------------------
+# Job 2 — Build one device per matrix slot (runs in parallel)
+# ---------------------------------------------------------------------------
+  build:
+    name: Build — ${{ matrix.device_name }}
+    needs: prepare
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        device_name: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     steps:
       # -----------------------------------------------------------------------
@@ -30,12 +98,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      # -----------------------------------------------------------------------
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
 
       # -----------------------------------------------------------------------
       - name: Install system dependencies
@@ -49,92 +111,96 @@ jobs:
             unzip
 
       # -----------------------------------------------------------------------
-      - name: Install Python dependencies
+      - name: Set up Python venv & install payload_dumper
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install payload-dumper-go || python3 -m pip install payload_dumper
+          python3 -m venv .venv
+          . .venv/bin/activate
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          pip install --quiet ./payload_dumper/
 
       # -----------------------------------------------------------------------
-      - name: Resolve device targets
-        id: targets
-        run: |
-          if [[ -n "${{ github.event.inputs.devices }}" ]]; then
-            # Manual trigger — use provided device list
-            DEVICES="${{ github.event.inputs.devices }}"
-          else
-            # Scheduled trigger — default to latest Pixel flagship (beta)
-            DEVICES="husky_beta16,shiba_beta16"
-          fi
-          # Convert comma-separated list to space-separated for bash
-          echo "device_list=${DEVICES//,/ }" >> "$GITHUB_OUTPUT"
-          echo "Resolved targets: $DEVICES"
+      - name: Make scripts executable
+        run: chmod +x ./*.sh
 
       # -----------------------------------------------------------------------
-      - name: Download OTA payloads
-        run: |
-          chmod +x download_ota.sh utils.sh
-          # Pass each device as a separate argument
-          # shellcheck disable=SC2086
-          bash download_ota.sh ${{ steps.targets.outputs.device_list }}
+      - name: Download OTA payload for ${{ matrix.device_name }}
+        run: bash download_ota.sh "${{ matrix.device_name }}"
 
       # -----------------------------------------------------------------------
-      - name: Extract images and build modules
+      - name: Extract images and build module
         id: build
-        run: |
-          chmod +x extract_images.sh build_props.sh build_sysconfig.sh build_module.sh
-          bash extract_images.sh
+        run: bash extract_images.sh
 
       # -----------------------------------------------------------------------
-      - name: Collect build artifacts
-        id: artifacts
-        run: |
-          ZIPS=$(find . -maxdepth 1 -name "*.zip" -printf "%f\n" | sort | tr '\n' ' ')
-          echo "zip_files=${ZIPS}" >> "$GITHUB_OUTPUT"
-
-          # Aggregate metadata from all built modules
-          NAMES=""
-          PATCHES=""
-          for zip in *.zip; do
-            [ -f "$zip" ] || continue
-            base="${zip%.zip}"
-            NAMES="${NAMES:+$NAMES, }$base"
-          done
-          echo "module_names=${NAMES}" >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
-
-      # -----------------------------------------------------------------------
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pixel-props-modules-${{ steps.artifacts.outputs.build_date }}
-          path: "*.zip"
-          if-no-files-found: error
-          retention-days: 30
-
-      # -----------------------------------------------------------------------
-      - name: Create GitHub Release
-        if: ${{ steps.artifacts.outputs.zip_files != '' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ steps.artifacts.outputs.build_date }}-${{ github.run_number }}
-          name: "Pixel Props — ${{ steps.artifacts.outputs.build_date }}"
-          body: |
-            ## Pixel Props Module Build
-
-            **Date:** ${{ steps.artifacts.outputs.build_date }}
-            **Modules:** ${{ steps.artifacts.outputs.module_names }}
-            **Triggered by:** ${{ github.event_name == 'schedule' && 'Scheduled run' || github.actor }}
-
-            ### Installation
-            1. Download the `.zip` file for your device.
-            2. Flash via **Magisk**, **KernelSU**, or **APatch**.
-            3. Reboot and verify attestation with [Play Integrity API Checker](https://play.google.com/store/apps/details?id=gr.nikolasspyr.integritycheck).
-
-            ### Support
-            - Telegram: [t.me/PixelProps](https://t.me/PixelProps)
-          files: "*.zip"
-          draft: false
-          prerelease: false
-          make_latest: true
+      - name: Check if build already exists in any release
+        id: check_build
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASENAME="${{ steps.build.outputs.module_base_name }}"
+          echo "Checking if '${BASENAME}' already exists in any release..."
+
+          BUILD_EXISTS=false
+          RELEASES=$(gh release list --limit 100 --json tagName -q '.[].tagName' 2>/dev/null || true)
+
+          for TAG in $RELEASES; do
+            [[ "$TAG" == "${{ needs.prepare.outputs.tag_name }}" ]] && continue
+            RELEASE_BODY=$(gh release view "$TAG" --json body -q '.body' 2>/dev/null || true)
+            if [[ "$RELEASE_BODY" == *"${BASENAME}"* ]]; then
+              echo "Found '${BASENAME}' in release ${TAG} — skipping upload."
+              BUILD_EXISTS=true
+              break
+            fi
+          done
+
+          echo "BUILD_EXISTS=${BUILD_EXISTS}" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      - name: Upload module zip to release
+        if: steps.check_build.outputs.BUILD_EXISTS == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare.outputs.tag_name }}" \
+            "./${{ steps.build.outputs.module_base_name }}.zip" \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+      # -----------------------------------------------------------------------
+      - name: Append build info to release notes
+        if: steps.check_build.outputs.BUILD_EXISTS == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_BODY=$(gh release view "${{ needs.prepare.outputs.tag_name }}" \
+            --json body -q '.body' --repo "${{ github.repository }}" 2>/dev/null || true)
+
+          APPEND="
+
+          ---
+          ## ${{ steps.build.outputs.device_name }} (${{ steps.build.outputs.device_codename }})
+          #### Module
+          - File name: \`${{ steps.build.outputs.module_base_name }}.zip\`
+          - SHA256: \`${{ steps.build.outputs.module_hash }}\`
+          #### Firmware
+          - Build: \`${{ steps.build.outputs.device_build_description }}\`"
+
+          gh release edit "${{ needs.prepare.outputs.tag_name }}" \
+            --notes "${CURRENT_BODY}${APPEND}" \
+            --repo "${{ github.repository }}"
+
+      # -----------------------------------------------------------------------
+      - name: Send to Telegram
+        if: steps.check_build.outputs.BUILD_EXISTS == 'false'
+        run: |
+          printf '%s - %s\n%s' \
+            "${{ steps.build.outputs.device_name }}" \
+            "${{ steps.build.outputs.device_codename }}" \
+            "${{ steps.build.outputs.device_build_description }}" \
+            > .tg_caption
+
+          curl -sSf -X POST \
+            "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendDocument" \
+            -F "chat_id=${{ secrets.CHANNEL_ID }}" \
+            -F "document=@${{ steps.build.outputs.module_base_name }}.zip;type=application/zip" \
+            -F "caption=<.tg_caption"

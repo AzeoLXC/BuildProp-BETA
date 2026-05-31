@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-[ -f "util_functions.sh" ] && . ./util_functions.sh || { echo "Error: util_functions.sh dependency missing."; exit 1; }
+[ -f "utils.sh" ] && . ./utils.sh || { echo "Error: utils.sh dependency missing."; exit 1; }
 [ $# -eq 0 ] && { print_message "Error: No device arguments provided." error; exit 1; }
 
 IFS=,
